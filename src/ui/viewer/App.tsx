@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Header } from './components/Header';
 import { Feed } from './components/Feed';
 import { ContextSettingsModal } from './components/ContextSettingsModal';
 import { LogsDrawer } from './components/LogsModal';
+import { SearchCommandPalette } from './components/search/SearchCommandPalette';
+import type { HighlightFeedItemTarget } from './components/search/SearchCommandPalette';
 import { WelcomeCard, getStoredWelcomeDismissed, setStoredWelcomeDismissed } from './components/WelcomeCard';
 import { useSSE } from './hooks/useSSE';
 import { useSettings } from './hooks/useSettings';
@@ -11,11 +13,22 @@ import { usePagination } from './hooks/usePagination';
 import { useTheme } from './hooks/useTheme';
 import { Observation, Summary, UserPrompt } from './types';
 import { mergeAndDeduplicateByProject } from './utils/data';
+import { TIMING } from './constants/timing';
+
+function getFeedTargetElementId(target: HighlightFeedItemTarget): string {
+  if (target.kind === 'memory') return `feed-memory-${target.id}`;
+  if (target.kind === 'session') return `feed-session-${target.id}`;
+  return `feed-prompt-${target.id}`;
+}
 
 export function App() {
   const [currentFilter, setCurrentFilter] = useState('');
   const [contextPreviewOpen, setContextPreviewOpen] = useState(false);
   const [logsModalOpen, setLogsModalOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [highlightTarget, setHighlightTarget] = useState<HighlightFeedItemTarget | null>(null);
+  const highlightFrameRef = useRef<number | null>(null);
+  const highlightTimeoutRef = useRef<number | null>(null);
   const [welcomeDismissed, setWelcomeDismissed] = useState<boolean>(getStoredWelcomeDismissed);
   const [paginatedObservations, setPaginatedObservations] = useState<Observation[]>([]);
   const [paginatedSummaries, setPaginatedSummaries] = useState<Summary[]>([]);
@@ -61,6 +74,93 @@ export function App() {
 
   const toggleLogsModal = useCallback(() => {
     setLogsModalOpen(prev => !prev);
+  }, []);
+
+  const toggleSearch = useCallback(() => {
+    setSearchOpen(prev => !prev);
+  }, []);
+
+  const cancelScheduledHighlight = useCallback(() => {
+    if (highlightFrameRef.current !== null) {
+      window.cancelAnimationFrame(highlightFrameRef.current);
+      highlightFrameRef.current = null;
+    }
+    if (highlightTimeoutRef.current !== null) {
+      window.clearTimeout(highlightTimeoutRef.current);
+      highlightTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearHighlight = useCallback(() => {
+    cancelScheduledHighlight();
+    setHighlightTarget(null);
+  }, [cancelScheduledHighlight]);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    clearHighlight();
+  }, [clearHighlight]);
+
+  const handleHighlightFeedItem = useCallback((target: HighlightFeedItemTarget) => {
+    clearHighlight();
+    highlightFrameRef.current = window.requestAnimationFrame(() => {
+      if (document.getElementById(getFeedTargetElementId(target))) {
+        setHighlightTarget(target);
+      }
+      highlightFrameRef.current = null;
+    });
+  }, [clearHighlight]);
+
+  useEffect(() => {
+    return cancelScheduledHighlight;
+  }, [cancelScheduledHighlight]);
+
+  useEffect(() => {
+    if (!searchOpen) {
+      clearHighlight();
+    }
+  }, [clearHighlight, searchOpen]);
+
+  useEffect(() => {
+    if (!highlightTarget) return;
+
+    const elementId = getFeedTargetElementId(highlightTarget);
+    const frame = window.requestAnimationFrame(() => {
+      const element = document.getElementById(elementId);
+      if (!element) {
+        setHighlightTarget(null);
+        return;
+      }
+
+      element.scrollIntoView({
+        block: 'center',
+        behavior: 'smooth',
+      });
+    });
+    highlightTimeoutRef.current = window.setTimeout(() => {
+      setHighlightTarget(null);
+      highlightTimeoutRef.current = null;
+    }, TIMING.SEARCH_HIGHLIGHT_DURATION_MS);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (highlightTimeoutRef.current !== null) {
+        window.clearTimeout(highlightTimeoutRef.current);
+        highlightTimeoutRef.current = null;
+      }
+    };
+  }, [highlightTarget]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   const handleLoadMore = useCallback(async () => {
@@ -110,6 +210,7 @@ export function App() {
         themePreference={preference}
         onThemeChange={setThemePreference}
         onContextPreviewToggle={toggleContextPreview}
+        onSearchToggle={toggleSearch}
         onShowHelp={() => {
           setStoredWelcomeDismissed(false);
           setWelcomeDismissed(false);
@@ -123,6 +224,14 @@ export function App() {
         onLoadMore={handleLoadMore}
         isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading}
         hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore}
+        highlightTarget={highlightTarget}
+      />
+
+      <SearchCommandPalette
+        isOpen={searchOpen}
+        project={currentFilter || undefined}
+        onClose={closeSearch}
+        onHighlightFeedItem={handleHighlightFeedItem}
       />
 
       {!welcomeDismissed && (

@@ -13,9 +13,30 @@ interface FeedProps {
   onLoadMore: () => void;
   isLoading: boolean;
   hasMore: boolean;
+  highlightTarget?: { kind: 'memory' | 'session' | 'prompt'; id: number } | null;
 }
 
-export function Feed({ observations, summaries, prompts, onLoadMore, isLoading, hasMore }: FeedProps) {
+function getFeedItemTarget(item: FeedItem): { kind: 'memory' | 'session' | 'prompt'; id: number; elementId: string } {
+  if (item.itemType === 'observation') {
+    return { kind: 'memory', id: item.id, elementId: `feed-memory-${item.id}` };
+  }
+
+  if (item.itemType === 'summary') {
+    return { kind: 'session', id: item.id, elementId: `feed-session-${item.id}` };
+  }
+
+  return { kind: 'prompt', id: item.id, elementId: `feed-prompt-${item.id}` };
+}
+
+export function Feed({
+  observations,
+  summaries,
+  prompts,
+  onLoadMore,
+  isLoading,
+  hasMore,
+  highlightTarget = null,
+}: FeedProps) {
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const feedRef = useRef<HTMLDivElement>(null);
   const onLoadMoreRef = useRef(onLoadMore);
@@ -64,12 +85,28 @@ export function Feed({ observations, summaries, prompts, onLoadMore, isLoading, 
       <div className="feed-content">
         {items.map(item => {
           const key = `${item.itemType}-${item.id}`;
+          const target = getFeedItemTarget(item);
+          const isHighlighted = highlightTarget?.kind === target.kind && highlightTarget.id === target.id;
+          const wrapperClassName = `feed-item-wrapper${isHighlighted ? ' feed-highlight' : ''}`;
+
           if (item.itemType === 'observation') {
-            return <ObservationCard key={key} observation={item} />;
+            return (
+              <div key={key} id={target.elementId} className={wrapperClassName}>
+                <ObservationCard observation={item} />
+              </div>
+            );
           } else if (item.itemType === 'summary') {
-            return <SummaryCard key={key} summary={item} />;
+            return (
+              <div key={key} id={target.elementId} className={wrapperClassName}>
+                <SummaryCard summary={item} />
+              </div>
+            );
           } else {
-            return <PromptCard key={key} prompt={item} />;
+            return (
+              <div key={key} id={target.elementId} className={wrapperClassName}>
+                <PromptCard prompt={item} />
+              </div>
+            );
           }
         })}
         {items.length === 0 && !isLoading && (
